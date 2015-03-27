@@ -1,129 +1,79 @@
 package Net::API::WHMCS;
 
-use 5.006;
-use strict;
-use warnings;
+use Net::API::WHMCS::Types;
 
-=head1 NAME
+use Moose;
+use Carp qw/carp croak/;
 
-Net::API::WHMCS - The great new Net::API::WHMCS!
+use LWP::UserAgent;
 
-=head1 VERSION
+use Digest::MD5	qw/md5_hex/;
+use JSON::PP		qw/decode_json/;
 
-Version 0.01
+our $VERSION = '0.11';
 
-=cut
+has ['endpoint', 'user', 'password','api_token'] => (
+	is				=> 'ro',
+	isa				=> 'Str',
+	required	=> 1,
+);
+has 'secure' => (
+	is				=> 'ro',
+	isa				=> 'Int',
+	default		=> 1,
+	predicate	=> 'is_secure',
+);
+has '+password' => (
+	writer		=> '_set_pass',
+	trigger		=> sub {
+		my ($self,$pass,$previous) = @_;
+		return if defined $previous;
+		$self->_set_pass(md5_hex($pass));
+	},
+);
+has 'wwwclient' => (
+	is				=> 'ro',
+	isa				=> 'LWPUserAgent',
+	default		=> sub { return LWP::UserAgent->new(agent => "Net::API::WHMCS/$VERSION") },
+);
 
-our $VERSION = '0.01';
-
-
-=head1 SYNOPSIS
-
-Quick summary of what the module does.
-
-Perhaps a little code snippet.
-
-    use Net::API::WHMCS;
-
-    my $foo = Net::API::WHMCS->new();
-    ...
-
-=head1 EXPORT
-
-A list of functions that can be exported.  You can delete this section
-if you don't export anything, such as for a purely object-oriented module.
-
-=head1 SUBROUTINES/METHODS
-
-=head2 function1
-
-=cut
-
-sub function1 {
+#Upon creation, check that we're able to access the WHMCS installation specified.
+#This is done because if we're unable to call 'getadmindetails', then we won't be able to call /anything/.
+sub BUILD {
+	my ($self,$opts) = @_;
+	require LWP::Protocol::https or croak "SSL enabled, but LWP::Protocol::https is unavailable" if $self->is_secure;
+	my $test = $self->api_request('getadmindetails') or croak "Could not connect to API!";
+	croak "Could not confirm API connection successful via 'getadmindetails'!" unless $test->{result} eq 'success';
 }
 
-=head2 function2
-
-=cut
-
-sub function2 {
+sub api_request {
+	my $self = shift;
+	my $method = shift;
+	my $request = $self->_build_request(action => $method,@_) or return undef;
+	my $result = $self->_parse_request($request) or return undef;
+	return $result;
 }
 
-=head1 AUTHOR
+sub _build_request {
+	my $self = shift;
+	my %fields = (
+		'username'			=> $self->user,
+		'password'			=> $self->password,
+		'accesskey'			=> $self->api_token,
+		'responsetype'	=> 'json',
+		@_,
+	);
+	return $self->wwwclient->post($self->endpoint,\%fields) or return undef;
+}
 
-Matthew Connelly, C<< <maff at cpan.org> >>
+sub _parse_request {
+	my ($self,$request) = @_;
+	my $response = $request->decoded_content;
+	$response =~ /^{/ or return undef;
+	return decode_json $response or return undef;
+}
 
-=head1 BUGS
-
-Please report any bugs or feature requests to C<bug-net-api-whmcs at rt.cpan.org>, or through
-the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Net-API-WHMCS>.  I will be notified, and then you'll
-automatically be notified of progress on your bug as I make changes.
-
-
-
-
-=head1 SUPPORT
-
-You can find documentation for this module with the perldoc command.
-
-    perldoc Net::API::WHMCS
-
-
-You can also look for information at:
-
-=over 4
-
-=item * RT: CPAN's request tracker (report bugs here)
-
-L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=Net-API-WHMCS>
-
-=item * AnnoCPAN: Annotated CPAN documentation
-
-L<http://annocpan.org/dist/Net-API-WHMCS>
-
-=item * CPAN Ratings
-
-L<http://cpanratings.perl.org/d/Net-API-WHMCS>
-
-=item * Search CPAN
-
-L<http://search.cpan.org/dist/Net-API-WHMCS/>
-
-=back
-
-
-=head1 ACKNOWLEDGEMENTS
-
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2015 Matthew Connelly.
-
-This program is distributed under the MIT (X11) License:
-L<http://www.opensource.org/licenses/mit-license.php>
-
-Permission is hereby granted, free of charge, to any person
-obtaining a copy of this software and associated documentation
-files (the "Software"), to deal in the Software without
-restriction, including without limitation the rights to use,
-copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the
-Software is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
-OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
-HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
-
-
-=cut
-
-1; # End of Net::API::WHMCS
+__PACKAGE__->meta->make_immutable;
+no Moose;
+1;
+__END__
